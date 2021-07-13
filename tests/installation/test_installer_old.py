@@ -293,7 +293,7 @@ def test_run_install_no_dev(installer, locker, repo, package, installed):
     assert len(updates) == 0
 
     removals = installer.installer.removals
-    assert len(removals) == 1
+    assert len(removals) == 0
 
 
 @pytest.mark.parametrize(
@@ -374,10 +374,11 @@ def test_run_install_remove_untracked(
     assert len(updates) == 0
 
     removals = installer.installer.removals
+
     expected_removals = {
         package_b.name,
         package_c.name,
-        *managed_reserved_package_names,
+        *set(RESERVED_PACKAGES).difference(managed_reserved_package_names),
     }
     assert set(r.name for r in removals) == expected_removals
 

@@ -211,7 +211,7 @@ class Installer:
             self._io,
         )
 
-        ops = solver.solve(use_latest=[])
+        ops = solver.solve(use_latest=[]).calculate_operations()
 
         local_repo = Repository()
         self._populate_local_repo(local_repo, ops)
@@ -246,10 +246,9 @@ class Installer:
                 self._installed_repository,
                 locked_repository,
                 self._io,
-                remove_untracked=self._remove_untracked,
             )
 
-            ops = solver.solve(use_latest=self._whitelist)
+            ops = solver.solve(use_latest=self._whitelist).calculate_operations()
         else:
             self._io.write_line("<info>Installing dependencies from lock file</>")
 
@@ -310,19 +309,38 @@ class Installer:
         pool.add_repository(repo)
 
         solver = Solver(
-            root,
-            pool,
-            self._installed_repository,
-            locked_repository,
-            NullIO(),
-            remove_untracked=self._remove_untracked,
+            root, pool, self._installed_repository, locked_repository, NullIO()
         )
         # Everything is resolved at this point, so we no longer need
         # to load deferred dependencies (i.e. VCS, URL and path dependencies)
         solver.provider.load_deferred(False)
 
         with solver.use_environment(self._env):
-            ops = solver.solve(use_latest=self._whitelist)
+            ops = solver.solve(use_latest=self._whitelist).calculate_operations(
+                without_uninstalls=True
+            )
+
+        # If no packages synchronisation has been requested we need
+        # to calculate the uninstall operations
+        from poetry.puzzle.transaction import Transaction
+
+        transaction = Transaction(
+            locked_repository.packages,
+            [(package, 0) for package in local_repo.packages],
+            installed_packages=[
+                package
+                for package in self._installed_repository.packages
+                if package.name != root.name
+            ],
+        )
+
+        ops = [
+            op
+            for op in transaction.calculate_operations(
+                remove_untracked=self._remove_untracked
+            )
+            if op.job_type == "uninstall"
+        ] + ops
 
         # We need to filter operations so that packages
         # not compatible with the current system,
@@ -502,9 +520,7 @@ class Installer:
             for installed in installed_repo.packages:
                 if locked.name == installed.name:
                     is_installed = True
-                    if locked.category == "dev" and not self.is_dev_mode():
-                        ops.append(Uninstall(locked))
-                    elif locked.optional and locked.name not in extra_packages:
+                    if locked.optional and locked.name not in extra_packages:
                         # Installed but optional and not requested in extras
                         ops.append(Uninstall(locked))
                     elif locked.version != installed.version:
